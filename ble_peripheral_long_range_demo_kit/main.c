@@ -68,6 +68,7 @@
 #include "app_util_platform.h"
 #include "bsp_btn_ble.h"
 #include "nrf_pwr_mgmt.h"
+#include "app_timer.h"
 
 #include "app_scheduler.h"
 #include "nrf_delay.h"
@@ -133,6 +134,8 @@
 #define SCHED_QUEUE_SIZE 20 /**< Maximum number of events in the scheduler queue. */
 #endif
 
+//#define PSR_UPDATE_INTERVAL   APP_TIMER_TICKS(1000)
+//APP_TIMER_DEF(m_psr_update_timer_id);                    /**< Timer used to toggle LED for "scan mode" indication on the dev.kit. */
 
 #define BUTTON_DETECTION_DELAY APP_TIMER_TICKS(50) /**< Delay from a GPIOTE event until a button is reported as pushed (in number of timer ticks). */
 
@@ -191,7 +194,6 @@ static void display_update(void);
 app_display_content_t m_application_state = {0};                                   /**< Struct containing the dynamic content of the display */
 
 
-static void set_current_adv_params_and_start_advertising(void);
 static void advertising_init(void);
 static void advertising_start(void);
 
@@ -218,6 +220,14 @@ static void restart_advertising_callback(void *p)
         advertising_start();
 }
 
+static void psr_update_timeout_handler(void * p_context)
+{
+        m_application_state.psr = get_packet_success_rate();
+        display_update();
+
+        NRF_LOG_INFO("Packet Success Rate ( %03d%%)", m_application_state.psr);
+}
+
 /**@brief Function for initializing the timer module.
  */
 static void timers_init(void)
@@ -227,6 +237,10 @@ static void timers_init(void)
 
         err_code = app_timer_create(&m_restart_advertising_timer_id, APP_TIMER_MODE_SINGLE_SHOT, restart_advertising_callback);
         APP_ERROR_CHECK(err_code);
+
+//        // Creating the timers used to indicate the state/selection mode of the board.
+//        err_code = app_timer_create(&m_psr_update_timer_id, APP_TIMER_MODE_REPEATED, psr_update_timeout_handler);
+//        APP_ERROR_CHECK(err_code);
 }
 
 
@@ -345,7 +359,15 @@ static void fts_evt_handler(ble_fts_t *p_fts, ble_fts_evt_t const *p_fts_evt)
         case BLE_FTS_EVT_RX_CMD_RECEIVED: /**< Event indicating that the central has received something from a peer. */
                 NRF_LOG_INFO("BLE_FTS_EVT_RX_CMD_RECEIVED");
                 NRF_LOG_HEXDUMP_INFO(p_fts_evt->p_data, p_fts_evt->data_len);
+//
+//                if (*p_fts_evt->p_data <= 100)
+                {
+                      memcpy(&m_application_state.psr, p_fts_evt->p_data, p_fts_evt->data_len);//get_packet_success_rate();
+                      display_update();
+                }
+
                 break;
+
         case BLE_FTS_EVT_RX_DATA_RECEIVED: /**< Event indicating that the central has written to peripheral. */
                 NRF_LOG_INFO("BLE_FTS_EVT_RX_DATA_RECEIVED");
                 NRF_LOG_HEXDUMP_INFO(p_fts_evt->p_data, p_fts_evt->data_len);
@@ -385,7 +407,7 @@ static void services_init(void)
         its_init.evt_handler = its_evt_handler;
         err_code = ble_its_init(&m_its, &its_init);
         APP_ERROR_CHECK(err_code);
-//
+
         // // Initialize NUS.
         memset(&nus_init, 0, sizeof(nus_init));
         nus_init.data_handler = nus_data_handler;
@@ -516,7 +538,6 @@ static void on_ble_gap_evt_disconnected(ble_gap_evt_t const * p_gap_evt)
         {
                 // Start advertising with the current setup.
                 bsp_board_leds_off();
-                set_current_adv_params_and_start_advertising();
         }
 
 }
@@ -560,6 +581,10 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 packet_error_rate_reset_counter();
                 packet_error_rate_detect_enable();
 
+//                // Current state is scanning, not trying to connect. Start blinking associated LED
+//                err_code = app_timer_start(m_psr_update_timer_id, PSR_UPDATE_INTERVAL, NULL);
+//                APP_ERROR_CHECK(err_code);
+
                 m_application_state.app_state = APP_STATE_CONNECTED;
                 display_update();
 
@@ -578,10 +603,13 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 
                 packet_error_rate_detect_disable();
 
+//                // Current state is scanning, not trying to connect. Start blinking associated LED
+//                err_code = app_timer_stop(m_psr_update_timer_id);
+//                APP_ERROR_CHECK(err_code);
+
                 if(m_application_state.app_state == APP_STATE_CONNECTED)
                 {
                         m_application_state.app_state = APP_STATE_DISCONNECTED;
-
                         err_code = app_timer_start(m_restart_advertising_timer_id, APP_TIMER_TICKS(RESTART_ADVERTISING_TIMEOUT_MS), 0);
                         APP_ERROR_CHECK(err_code);
 
@@ -634,8 +662,8 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 if (rssi_count % 10 == 0)
                 {
                         packet_error_rate_timeout_handler();
-                        NRF_LOG_INFO("RSSI = %d (dBm), PSR = %03d%%", p_ble_evt->evt.gap_evt.params.rssi_changed.rssi, get_packet_success_rate());
-                        m_application_state.psr = get_packet_success_rate();
+                        //NRF_LOG_INFO("RSSI = %d (dBm), PSR = %03d%%", p_ble_evt->evt.gap_evt.params.rssi_changed.rssi, get_packet_success_rate());
+                        //m_application_state.psr = get_packet_success_rate();
                         m_application_state.rssi[p_ble_evt->evt.gap_evt.conn_handle] = p_ble_evt->evt.gap_evt.params.rssi_changed.rssi;
                         display_update();
                 }
@@ -648,19 +676,7 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
         }
 }
 
-/**@brief Function for starting advertising with the current selections of output power, phy, and connectable or non-connectable advertising.
- */
-static void set_current_adv_params_and_start_advertising(void)
-{
 
-//        phy_selection_set_state(m_adv_scan_phy_selected);
-//        on_non_conn_or_conn_adv_selection_state_set(m_adv_scan_type_selected);
-//        output_power_selection_set(m_output_power_selected);
-
-//        advertising_data_set();
-//        advertising_start();
-
-}
 
 /**@brief Function for the Event Scheduler initialization.
  */
@@ -1032,8 +1048,8 @@ static void buttons_init(void)
         static app_button_cfg_t buttons[] =
         {
                 {PHY_SELECTION_BUTTON,       false, BUTTON_PULL, button_event_handler},
-                {TX_POWER_BUTTON,  false, BUTTON_PULL, button_event_handler},
-                {APP_STATE_BUTTON, false, BUTTON_PULL, button_event_handler},
+                {TX_POWER_BUTTON,            false, BUTTON_PULL, button_event_handler},
+                {APP_STATE_BUTTON,           false, BUTTON_PULL, button_event_handler},
                 {THROUGHPUT_TEST_BUTTON, false, BUTTON_PULL, button_event_handler}
         };
 

@@ -57,6 +57,8 @@
 #include "nrf_ble_gatt.h"
 #include "nrf_pwr_mgmt.h"
 #include "nrf_ble_scan.h"
+#include "app_timer.h"
+
 
 #include "app_scheduler.h"
 #include "ble_image_transfer_service_c.h"
@@ -120,30 +122,9 @@
                 (*(DST)) <<= 8;          \
                 (*(DST))  |= (SRC)[0];   \
         } while (0)
-//
-// // Type holding the two output power options for this application.
-// typedef enum
-// {
-//         SELECTION_0_dBm = 0,
-//         SELECTION_8_dBm = 8
-// } output_power_selection_t;
-//
-// // Type holding the two possible phy options.
-// typedef enum
-// {
-//         SELECTION_1M_PHY = 0,
-//         SELECTION_CODED_PHY
-// } adv_scan_phy_selection_t;
-
-// static adv_scan_phy_selection_t m_adv_scan_phy_selected = SELECTION_CODED_PHY;
-// static output_power_selection_t m_output_power_selected = SELECTION_8_dBm;
-// static bool m_app_initiated_disconnect   = false;    //The application has initiated disconnect. Used to "tell" on_ble_gap_evt_disconnected() to not start scanning.
-// static bool m_waiting_for_disconnect_evt = false;    // Disconnect is initiated. The application has to wait for BLE_GAP_EVT_DISCONNECTED before proceeding.
 
 static void display_update(void);
 app_display_content_t m_application_state = {0};                                   /**< Struct containing the dynamic content of the display */
-
-
 
 BLE_NUS_C_DEF(m_ble_nus_c);                                             /**< BLE Nordic UART Service (NUS) client instance. */
 NRF_BLE_GATT_DEF(m_gatt);                                               /**< GATT module instance. */
@@ -153,6 +134,11 @@ NRF_BLE_SCAN_DEF(m_scan);                                               /**< Sca
 BLE_ITS_C_ARRAY_DEF(m_ble_its_c, NRF_SDH_BLE_CENTRAL_LINK_COUNT); /**< BLE Nordic Image Transfer Service (ITS) client instance. */
 
 BLE_FTS_C_DEF(m_ble_fts_c); /**< BLE Nordic File Transfer Service (FTS) client instance. */
+
+#define PSR_UPDATE_INTERVAL   APP_TIMER_TICKS(1000)
+APP_TIMER_DEF(m_psr_update_timer_id);                    /**< Timer used to toggle LED for "scan mode" indication on the dev.kit. */
+
+
 
 static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID; /**< Handle of the current connection. */
 
@@ -652,6 +638,10 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 m_application_state.app_state = APP_STATE_CONNECTED;
                 display_update();
 
+                // Current state is scanning, not trying to connect. Start blinking associated LED
+                err_code = app_timer_start(m_psr_update_timer_id, PSR_UPDATE_INTERVAL, NULL);
+                APP_ERROR_CHECK(err_code);
+
                 break;
 
         case BLE_GAP_EVT_DISCONNECTED:
@@ -661,6 +651,10 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                              p_gap_evt->params.disconnected.reason);
 
                 packet_error_rate_detect_disable();
+
+                // Current state is scanning, not trying to connect. Start blinking associated LED
+                err_code = app_timer_stop(m_psr_update_timer_id);
+                APP_ERROR_CHECK(err_code);
 
                 m_conn_handle = BLE_CONN_HANDLE_INVALID;
                 scan_start();
@@ -725,7 +719,7 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 {
                         packet_error_rate_timeout_handler();
                         NRF_LOG_INFO("RSSI = %d (dBm), PSR = %03d%%", p_ble_evt->evt.gap_evt.params.rssi_changed.rssi, get_packet_success_rate());
-                        m_application_state.psr = get_packet_success_rate();
+
                         m_application_state.rssi[p_ble_evt->evt.gap_evt.conn_handle] = p_ble_evt->evt.gap_evt.params.rssi_changed.rssi;
                         display_update();
 
@@ -922,59 +916,59 @@ static void button_event_handler(uint8_t pin_no, uint8_t button_action)
                         NRF_LOG_INFO("PHY_SELECTION_BUTTON");
                         switch (m_application_state.app_state)
                         {
-                                case APP_STATE_CONNECTED:
+                        case APP_STATE_CONNECTED:
+                        {
+
+                        }
+                        break;
+                        case APP_STATE_IDLE:
+                        {
+                                m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
+                                switch(m_application_state.phy)
                                 {
-                                
+                                case APP_PHY_CODED:
+                                {
+                                        NRF_LOG_INFO("Starting scan on coded phy.");
+                                        break;
+                                }
+                                case APP_PHY_1M:
+                                {
+                                        NRF_LOG_INFO("Starting scan on 1Mbps.");
+                                        break;
+                                }
+                                default:
+                                {
+                                        NRF_LOG_INFO("Phy selection did not match setup. Scan not started.");
                                 }
                                 break;
-                                case APP_STATE_IDLE:
+                                }
+                                display_update();
+                                break;
+                        }
+                        case APP_STATE_SCANNING:
+                        {
+                                m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
+                                switch(m_application_state.phy)
                                 {
-                                        m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
-                                        switch(m_application_state.phy)
-                                        {
-                                                case APP_PHY_CODED:
-                                                {
-                                                        NRF_LOG_INFO("Starting scan on coded phy.");
-                                                        break;
-                                                }
-                                                case APP_PHY_1M:
-                                                {
-                                                        NRF_LOG_INFO("Starting scan on 1Mbps.");
-                                                        break;
-                                                }
-                                                default:
-                                                {
-                                                        NRF_LOG_INFO("Phy selection did not match setup. Scan not started.");
-                                                }
-                                                break;
-                                        }
-                                        display_update();
+                                case APP_PHY_CODED:
+                                {
+                                        NRF_LOG_INFO("Starting scan on coded phy.");
                                         break;
                                 }
-                                case APP_STATE_SCANNING:
+                                case APP_PHY_1M:
                                 {
-                                        m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
-                                        switch(m_application_state.phy)
-                                        {
-                                        case APP_PHY_CODED:
-                                        {
-                                                NRF_LOG_INFO("Starting scan on coded phy.");
-                                                break;
-                                        }
-                                        case APP_PHY_1M:
-                                        {
-                                                NRF_LOG_INFO("Starting scan on 1Mbps.");
-                                                break;
-                                        }
-                                        default:
-                                        {
-                                                NRF_LOG_INFO("Phy selection did not match setup. Scan not started.");
-                                        }
+                                        NRF_LOG_INFO("Starting scan on 1Mbps.");
                                         break;
-                                        }
-                                        scan_start();
-                                        display_update();
                                 }
+                                default:
+                                {
+                                        NRF_LOG_INFO("Phy selection did not match setup. Scan not started.");
+                                }
+                                break;
+                                }
+                                scan_start();
+                                display_update();
+                        }
                         }
                 }
                 break;
@@ -1149,10 +1143,28 @@ static void fts_c_init(void)
         APP_ERROR_CHECK(err_code);
 }
 
+static void psr_update_timeout_handler(void * p_context)
+{
+        ret_code_t err_code;
+
+        uint8_t psr_value;
+
+        m_application_state.psr = get_packet_success_rate();
+        psr_value = m_application_state.psr;
+
+        err_code = ble_fts_c_rx_cmd_send(&m_ble_fts_c, &psr_value, sizeof(psr_value));
+
+        display_update();
+}
+
 /**@brief Function for initializing the timer. */
 static void timer_init(void)
 {
         ret_code_t err_code = app_timer_init();
+        APP_ERROR_CHECK(err_code);
+
+        // Creating the timers used to indicate the state/selection mode of the board.
+        err_code = app_timer_create(&m_psr_update_timer_id, APP_TIMER_MODE_REPEATED, psr_update_timeout_handler);
         APP_ERROR_CHECK(err_code);
 }
 
