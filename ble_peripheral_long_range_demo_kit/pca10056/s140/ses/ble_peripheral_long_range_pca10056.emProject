@@ -78,6 +78,7 @@
       <file file_name="../../../../common/adafruit_touch_display/gfx_extended/nrf_gfx_ext.c" />
       <file file_name="../../../../common/adafruit_touch_display/ugui/ugui.c" />
       <file file_name="../../../../common/adafruit_touch_display/gfx_extended/ili9341_ext.c" />
+      <file file_name="../../../../module/packet_error_rate.c" />
     </folder>
     <folder Name="Board Definition">
       <file file_name="../../../../../../components/boards/boards.c" />

@@ -68,6 +68,7 @@
 #include "ble_file_transfer_service_c.h"
 
 #include "app_display.h"
+#include "packet_error_rate.h"
 
 
 
@@ -119,25 +120,25 @@
                 (*(DST)) <<= 8;          \
                 (*(DST))  |= (SRC)[0];   \
         } while (0)
+//
+// // Type holding the two output power options for this application.
+// typedef enum
+// {
+//         SELECTION_0_dBm = 0,
+//         SELECTION_8_dBm = 8
+// } output_power_selection_t;
+//
+// // Type holding the two possible phy options.
+// typedef enum
+// {
+//         SELECTION_1M_PHY = 0,
+//         SELECTION_CODED_PHY
+// } adv_scan_phy_selection_t;
 
-// Type holding the two output power options for this application.
-typedef enum
-{
-        SELECTION_0_dBm = 0,
-        SELECTION_8_dBm = 8
-} output_power_selection_t;
-
-// Type holding the two possible phy options.
-typedef enum
-{
-        SELECTION_1M_PHY = 0,
-        SELECTION_CODED_PHY
-} adv_scan_phy_selection_t;
-
-static adv_scan_phy_selection_t m_adv_scan_phy_selected = SELECTION_CODED_PHY;
-static output_power_selection_t m_output_power_selected = SELECTION_8_dBm;
-static bool m_app_initiated_disconnect   = false;    //The application has initiated disconnect. Used to "tell" on_ble_gap_evt_disconnected() to not start scanning.
-static bool m_waiting_for_disconnect_evt = false;    // Disconnect is initiated. The application has to wait for BLE_GAP_EVT_DISCONNECTED before proceeding.
+// static adv_scan_phy_selection_t m_adv_scan_phy_selected = SELECTION_CODED_PHY;
+// static output_power_selection_t m_output_power_selected = SELECTION_8_dBm;
+// static bool m_app_initiated_disconnect   = false;    //The application has initiated disconnect. Used to "tell" on_ble_gap_evt_disconnected() to not start scanning.
+// static bool m_waiting_for_disconnect_evt = false;    // Disconnect is initiated. The application has to wait for BLE_GAP_EVT_DISCONNECTED before proceeding.
 
 static void display_update(void);
 app_display_content_t m_application_state = {0};                                   /**< Struct containing the dynamic content of the display */
@@ -160,14 +161,6 @@ static uint16_t m_ble_its_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - OPCODE_LENGT
 static uint16_t m_ble_fts_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - OPCODE_LENGTH - HANDLE_LENGTH; /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 
 
-#define FAST_BLINK_INTERVAL   APP_TIMER_TIKCS(200)
-APP_TIMER_DEF(m_scan_slow_blink_timer_id);                    /**< Timer used to toggle LED for "scan mode" indication on the dev.kit. */
-
-#define SLOW_BLINK_INTERVAL   APP_TIMER_TICKS(750)
-APP_TIMER_DEF(m_1Mbps_led_slow_blink_timer_id);                /**< Timer used to toggle LED for phy selection indication on the dev.kit. */
-APP_TIMER_DEF(m_8dBm_led_slow_blink_timer_id);                 /**< Timer used to toggle LED for output power selection indication on the dev.kit. */
-APP_TIMER_DEF(m_time_keeper_timer_id);                         /**< Timer used to make sure app_timer runs continuously. Used by the log module.*/
-
 static uint8_t rssi_count = 0;
 
 /**@brief Names which the central applications will scan for, and which will be advertised by the peripherals.
@@ -175,7 +168,6 @@ static uint8_t rssi_count = 0;
  */
 static char const m_target_periph_name[] = "DeviceUART";      /**< If you want to connect to a peripheral using a given advertising name, type its name here. */
 static bool is_connect_per_addr = true;            /**< If you want to connect to a peripheral with a given address, set this to true and put the correct address in the variable below. */
-
 
 static ble_gap_addr_t const m_target_periph_addr =
 {
@@ -223,13 +215,15 @@ static void scan_start(void);
 
 /********************************************************************************/
 /********************************************************************************/
-/********************************************************************************/
-/********************************************************************************/
-/********************************************************************************/
-/********************************************************************************/
-/********************************************************************************/
-/********************************************************************************/
 
+
+static void request_phy(uint16_t c_handle, uint8_t phy)
+{
+        ble_gap_phys_t phy_req;
+        phy_req.tx_phys = phy;
+        phy_req.rx_phys = phy;
+        sd_ble_gap_phy_update(c_handle, &phy_req);
+}
 
 /**@brief Function for handling asserts in the SoftDevice.
  *
@@ -252,22 +246,19 @@ static void scan_start(void)
 {
         ret_code_t ret;
 
-        // Set the correct TX power.
-        ret = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_SCAN_INIT, NULL, m_output_power_selected);
-        APP_ERROR_CHECK(ret);
+        // Stop the scanning
+        nrf_ble_scan_stop();
 
-        NRF_LOG_INFO("Output power set to %d dBm", m_output_power_selected);
-
-        switch(m_adv_scan_phy_selected)
+        switch(m_application_state.phy)
         {
-        case SELECTION_CODED_PHY:
+        case APP_PHY_CODED:
         {
                 NRF_LOG_INFO("Starting scan on coded phy.");
                 ret = nrf_ble_scan_params_set(&m_scan, &m_scan_param_coded_phy);
                 APP_ERROR_CHECK(ret);
                 break;
         }
-        case SELECTION_1M_PHY:
+        case APP_PHY_1M:
         {
                 NRF_LOG_INFO("Starting scan on 1Mbps.");
                 ret = nrf_ble_scan_params_set(&m_scan, &m_scan_param_1MBps);
@@ -281,7 +272,6 @@ static void scan_start(void)
         break;
 
         }
-
         m_application_state.app_state = APP_STATE_SCANNING;
         display_update();
 
@@ -451,7 +441,6 @@ void uart_event_handle(app_uart_evt_t * p_event)
                 {
                         NRF_LOG_DEBUG("Ready to send data over BLE NUS");
                         NRF_LOG_HEXDUMP_DEBUG(data_array, index);
-
                         do
                         {
                                 ret_val = ble_nus_c_string_send(&m_ble_nus_c, data_array, index);
@@ -512,8 +501,7 @@ static void ble_nus_c_evt_handler(ble_nus_c_t * p_ble_nus_c, ble_nus_c_evt_t con
                 break;
 
         case BLE_NUS_C_EVT_DISCONNECTED:
-                NRF_LOG_INFO("Disconnected.");
-                scan_start();
+                NRF_LOG_DEBUG("Disconnected.");
                 break;
         }
 }
@@ -543,7 +531,7 @@ static void ble_its_c_evt_handler(ble_its_c_t *p_ble_its_c, ble_its_c_evt_t cons
                 break;
 
         case BLE_ITS_C_EVT_ITS_TX_EVT:
-                NRF_LOG_INFO("ITS Receive the number of bytes = %04d", receive_byte);
+                NRF_LOG_DEBUG("ITS Receive the number of bytes = %04d", receive_byte);
                 //NRF_LOG_DEBUG("BLE_ITS_C_EVT_ITS_TX_EVT %04d", receive_byte);
                 break;
 
@@ -553,14 +541,11 @@ static void ble_its_c_evt_handler(ble_its_c_t *p_ble_its_c, ble_its_c_evt_t cons
                 break;
 
         case BLE_ITS_C_EVT_ITS_RX_COMPLETE_EVT:
-                NRF_LOG_INFO("RX COMPLETE");
-                // m_counter_get = counter_get();
-
+                NRF_LOG_DEBUG("RX COMPLETE");
                 break;
 
         case BLE_ITS_C_EVT_DISCONNECTED:
-                NRF_LOG_INFO("Disconnected.");
-                //scan_start();
+                NRF_LOG_DEBUG("Disconnected.");
                 break;
         }
 }
@@ -589,37 +574,37 @@ static void ble_fts_c_evt_handler(ble_fts_c_t *p_ble_fts_c, ble_fts_c_evt_t cons
                 break;
 
         case BLE_EVT_FTS_C_TX_DATA:               /**< Event indicating that the central has received data something from a peer. */
-                NRF_LOG_INFO("BLE_EVT_FTS_C_TX_DATA");
-                NRF_LOG_INFO("Receive data from device");
-                NRF_LOG_HEXDUMP_INFO(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
+                NRF_LOG_DEBUG("BLE_EVT_FTS_C_TX_DATA");
+                NRF_LOG_DEBUG("Receive data from device");
+                NRF_LOG_HEXDUMP_DEBUG(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
 
                 break;
 
         case BLE_EVT_FTS_C_TX_CMD:                       /**< Event indicating that the central has received command something from a peer. */
-                NRF_LOG_INFO("BLE_EVT_FTS_C_TX_CMD");
-                NRF_LOG_INFO("Receive cmd from device");
-                NRF_LOG_HEXDUMP_INFO(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
+                NRF_LOG_DEBUG("BLE_EVT_FTS_C_TX_CMD");
+                NRF_LOG_DEBUG("Receive cmd from device");
+                NRF_LOG_HEXDUMP_DEBUG(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
 
                 break;
         case BLE_EVT_FTS_C_RX_CMD:
-                NRF_LOG_INFO("BLE_EVT_FTS_C_RX_CMD");
-                NRF_LOG_HEXDUMP_INFO(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
+                NRF_LOG_DEBUG("BLE_EVT_FTS_C_RX_CMD");
+                NRF_LOG_HEXDUMP_DEBUG(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
                 break;
 
         case BLE_EVT_FTS_C_RX_DATA:
-                NRF_LOG_INFO("BLE_EVT_FTS_C_RX_DATA");
-                NRF_LOG_HEXDUMP_INFO(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
+                NRF_LOG_DEBUG("BLE_EVT_FTS_C_RX_DATA");
+                NRF_LOG_HEXDUMP_DEBUG(p_ble_fts_evt->p_data, p_ble_fts_evt->data_len);
                 break;
 
         case BLE_EVT_FTS_C_RX_DATA_COMPLETE:               /**< Event indicating that the central has written data to peripheral completely. */
-                NRF_LOG_INFO("BLE_EVT_FTS_C_RX_DATA_COMPLETE");
+                NRF_LOG_DEBUG("BLE_EVT_FTS_C_RX_DATA_COMPLETE");
                 break;
 
         case BLE_EVT_FTS_C_CONNECTED:
                 break;
 
         case BLE_EVT_FTS_C_DISCONNECTED:
-                NRF_LOG_INFO("Disconnected.");
+                NRF_LOG_DEBUG("Disconnected.");
 
                 break;
         }
@@ -652,8 +637,6 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 err_code = sd_ble_gap_rssi_start(p_ble_evt->evt.gap_evt.conn_handle, 1, 2);
                 APP_ERROR_CHECK(err_code);
 
-                m_application_state.app_state = APP_STATE_CONNECTED;
-                display_update();
 
                 err_code = bsp_indication_set(BSP_INDICATE_CONNECTED);
                 APP_ERROR_CHECK(err_code);
@@ -662,6 +645,13 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 // start discovery of services. The NUS Client waits for a discovery result
                 err_code = ble_db_discovery_start(&m_db_disc, p_ble_evt->evt.gap_evt.conn_handle);
                 APP_ERROR_CHECK(err_code);
+
+                packet_error_rate_reset_counter();
+                packet_error_rate_detect_enable();
+
+                m_application_state.app_state = APP_STATE_CONNECTED;
+                display_update();
+
                 break;
 
         case BLE_GAP_EVT_DISCONNECTED:
@@ -670,10 +660,10 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                              p_gap_evt->conn_handle,
                              p_gap_evt->params.disconnected.reason);
 
+                packet_error_rate_detect_disable();
+
                 m_conn_handle = BLE_CONN_HANDLE_INVALID;
-
                 scan_start();
-
                 display_update();
 
                 break;
@@ -733,8 +723,12 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
         case BLE_GAP_EVT_RSSI_CHANGED:
                 if (rssi_count % 10 == 0)
                 {
+                        packet_error_rate_timeout_handler();
+                        NRF_LOG_INFO("RSSI = %d (dBm), PSR = %03d%%", p_ble_evt->evt.gap_evt.params.rssi_changed.rssi, get_packet_success_rate());
+                        m_application_state.psr = get_packet_success_rate();
                         m_application_state.rssi[p_ble_evt->evt.gap_evt.conn_handle] = p_ble_evt->evt.gap_evt.params.rssi_changed.rssi;
                         display_update();
+
                 }
                 rssi_count++;
                 break;
@@ -782,17 +776,21 @@ static void ble_stack_init(void)
         err_code = nrf_sdh_ble_enable(&ram_start);
         APP_ERROR_CHECK(err_code);
 
+#if 1
         err_code = sd_power_mode_set(NRF_POWER_MODE_CONSTLAT);
         APP_ERROR_CHECK(err_code);
 
         err_code = sd_power_dcdc_mode_set(NRF_POWER_DCDC_DISABLE);
         APP_ERROR_CHECK(err_code);
+#else
 
-        // err_code = sd_power_mode_set(NRF_POWER_MODE_LOWPWR);
-        // APP_ERROR_CHECK(err_code);
-        //
-        // err_code = sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);
-        // APP_ERROR_CHECK(err_code);
+        err_code = sd_power_mode_set(NRF_POWER_MODE_LOWPWR);
+        APP_ERROR_CHECK(err_code);
+
+        err_code = sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);
+        APP_ERROR_CHECK(err_code);
+
+#endif
 
         ble_gap_addr_t ble_address = {.addr_type = BLE_GAP_ADDR_TYPE_RANDOM_STATIC,
                                       .addr_id_peer = 0,
@@ -857,141 +855,6 @@ void gatt_init(void)
         APP_ERROR_CHECK(err_code);
 }
 
-///**@brief Function setting the internal scan state.
-// * Note: this function sets the internal "scan selection state", it does not start scanning.
-// *       The new scan mode will be used when (re-)starting to scan.
-// */
-//static void scan_selection_state_set(scan_type_selection_t scan_selection)
-//{
-//        ret_code_t err_code;
-//
-//        m_scan_type_selected = scan_selection;
-//        bsp_board_led_off(ADV_REPORT_LED);
-//        switch (scan_selection)
-//        {
-//        case SELECTION_SCAN_CONN:
-//        {
-//                // Current state is scanning,  trying to connect. Turn on associated LED.
-//                // err_code = app_timer_stop(m_scan_slow_blink_timer_id);
-//                // APP_ERROR_CHECK(err_code);
-//
-//                bsp_board_led_on(SCAN_LED);
-//                NRF_LOG_INFO("Scan mode set: scanning, trying to connect. Will be applied when scanning is re-started.");
-//
-//        } break;
-//
-//        case SELECTION_SCAN_NON_CONN:
-//        {
-//
-//                // Current state is scanning, not trying to connect. Start blinking associated LED
-//                // err_code = app_timer_start(m_scan_slow_blink_timer_id, SLOW_BLINK_INTERVAL, NULL);
-//                // APP_ERROR_CHECK(err_code);
-//
-//                NRF_LOG_INFO("Scan mode set: scanning only. Will be applied when scanning is re-started.");
-//        } break;
-//        }
-//
-//}
-
-/**@brief Function for setting new output power selection: LEDs start to blink according to the selected state.
- * Note: this function sets the output power/TX power.
- *       The new output power will be set when (re-)starting to scan.
- */
-
-static void output_power_selection_set(output_power_selection_t output_power)
-{
-        ret_code_t err_code;
-        m_output_power_selected = output_power;
-
-        switch ( m_output_power_selected)
-        {
-        case SELECTION_8_dBm:
-        {
-                // 8 dBm is the current output power, start blinking LED.
-                bsp_board_led_off(OUTPUT_POWER_SELECTION_LED); // not necessary because the LED should start to blink.
-                // err_code = app_timer_start(m_8dBm_led_slow_blink_timer_id, SLOW_BLINK_INTERVAL, NULL);
-                // APP_ERROR_CHECK(err_code);
-        } break;
-
-        case SELECTION_0_dBm:
-        {
-                // // 0 dBm is the current output power, turn on LED.
-                // err_code = app_timer_stop(m_8dBm_led_slow_blink_timer_id);
-                // APP_ERROR_CHECK(err_code);
-                bsp_board_led_on(OUTPUT_POWER_SELECTION_LED);
-        } break;
-        }
-
-        if (m_conn_handle == BLE_CONN_HANDLE_INVALID)
-        {
-                scan_start();
-        }
-
-}
-
-
-/**@brief Function for switching PHY: coded phy or 1 Mbps
- * Note: this function does only set the internal state, it does apply the new setting.
- *       The new phy will be be used when (re-)starting scanning.
- */
-static void on_phy_selection_button(void)
-{
-        // Change the selected phy.
-        adv_scan_phy_selection_t new_phy_selection;
-        switch (m_adv_scan_phy_selected)
-        {
-        case SELECTION_CODED_PHY: // SELECTION_CODED_PHY is the previous "state".
-        {
-                // 1 Mbps is the current state, LED should start blinking.
-                new_phy_selection = SELECTION_1M_PHY;
-        } break;
-
-        case SELECTION_1M_PHY:
-        {
-                // Coded phy is the current sate, turn on LED.
-                new_phy_selection = SELECTION_CODED_PHY;
-        } break;
-        }
-        //phy_selection_set_state(new_phy_selection);
-
-
-        if (m_conn_handle == BLE_CONN_HANDLE_INVALID)
-        {
-                m_adv_scan_phy_selected = new_phy_selection;
-                scan_start();
-        }
-}
-
-
-/**@brief Function for switching output power/TX power: 0 dBm or 8 dBm.
- * Note:  this function does only set the internal state, it does apply the new setting.
- *        The new output power will be set when (re-)starting to scan.
- */
-static void on_output_power_selection_button(void)
-{
-        // Change the output power.
-        output_power_selection_t new_output_power;
-        switch ( m_output_power_selected)
-        {
-        case SELECTION_0_dBm: // 0 dBm is the previous output power.
-        {
-                // 8 dBm is the current output power, start blinking LED.
-                new_output_power = SELECTION_8_dBm;
-
-        } break;
-
-        case SELECTION_8_dBm:
-        {
-                // 0 dBm is the current output power, turn on LED.
-                new_output_power = SELECTION_0_dBm;
-
-        } break;
-
-        }
-        output_power_selection_set(new_output_power);
-
-}
-
 
 static void display_update()
 {
@@ -1039,6 +902,8 @@ static void ble_go_to_idle(void)
         display_update();
 }
 
+
+
 /**@brief Function for handling events from the button handler module.
  *
  * @param[in] pin_no        The pin that the event applies to.
@@ -1055,9 +920,62 @@ static void button_event_handler(uint8_t pin_no, uint8_t button_action)
                 if (button_action == APP_BUTTON_PUSH)
                 {
                         NRF_LOG_INFO("PHY_SELECTION_BUTTON");
-                        on_phy_selection_button();
-                        display_update();
-                        m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
+                        switch (m_application_state.app_state)
+                        {
+                                case APP_STATE_CONNECTED:
+                                {
+                                
+                                }
+                                break;
+                                case APP_STATE_IDLE:
+                                {
+                                        m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
+                                        switch(m_application_state.phy)
+                                        {
+                                                case APP_PHY_CODED:
+                                                {
+                                                        NRF_LOG_INFO("Starting scan on coded phy.");
+                                                        break;
+                                                }
+                                                case APP_PHY_1M:
+                                                {
+                                                        NRF_LOG_INFO("Starting scan on 1Mbps.");
+                                                        break;
+                                                }
+                                                default:
+                                                {
+                                                        NRF_LOG_INFO("Phy selection did not match setup. Scan not started.");
+                                                }
+                                                break;
+                                        }
+                                        display_update();
+                                        break;
+                                }
+                                case APP_STATE_SCANNING:
+                                {
+                                        m_application_state.phy = (m_application_state.phy + 1) % APP_PHY_LIST_END;
+                                        switch(m_application_state.phy)
+                                        {
+                                        case APP_PHY_CODED:
+                                        {
+                                                NRF_LOG_INFO("Starting scan on coded phy.");
+                                                break;
+                                        }
+                                        case APP_PHY_1M:
+                                        {
+                                                NRF_LOG_INFO("Starting scan on 1Mbps.");
+                                                break;
+                                        }
+                                        default:
+                                        {
+                                                NRF_LOG_INFO("Phy selection did not match setup. Scan not started.");
+                                        }
+                                        break;
+                                        }
+                                        scan_start();
+                                        display_update();
+                                }
+                        }
                 }
                 break;
 
@@ -1065,23 +983,22 @@ static void button_event_handler(uint8_t pin_no, uint8_t button_action)
                 if (button_action == APP_BUTTON_PUSH)
                 {
                         NRF_LOG_INFO("OUTPUT_POWER_SELECTION_BUTTON");
-                        on_output_power_selection_button();
                         m_application_state.tx_power = (m_application_state.tx_power + 1) % 3;
                         int8_t tx_power = (int8_t)(m_application_state.tx_power * 4);
-                        // if(m_application_state.app_state == APP_STATE_CONNECTED)
-                        // {
-                        //         err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, m_conn_handle, tx_power);
-                        //         APP_ERROR_CHECK(err_code);
-                        //         NRF_LOG_INFO("TX Power for Connection: %d", tx_power);
-                        // }
-                        // else
-                        // {
-                        //         err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_ADV, m_adv_handle, tx_power);
-                        //         APP_ERROR_CHECK(err_code);
-                        //         NRF_LOG_INFO("TX Power for Advertising: %d", tx_power);
-                        // }
+                        if(m_application_state.app_state == APP_STATE_CONNECTED)
+                        {
+                                err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, m_conn_handle, tx_power);
+                                APP_ERROR_CHECK(err_code);
+                                NRF_LOG_INFO("TX Power for Connection: %d", tx_power);
+                        }
+                        else
+                        {
+                                // Set the correct TX power.
+                                err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_SCAN_INIT, NULL, tx_power);
+                                APP_ERROR_CHECK(err_code);
 
-
+                                NRF_LOG_INFO("TX Power for Advertising: %d", tx_power);
+                        }
                         display_update();
                 }
                 break;
@@ -1090,10 +1007,6 @@ static void button_event_handler(uint8_t pin_no, uint8_t button_action)
                 if (button_action == APP_BUTTON_PUSH)
                 {
                         NRF_LOG_INFO("SCAN_SELECTION_BUTTON");
-//                        if (m_conn_handle == BLE_CONN_HANDLE_INVALID)
-//                        {
-//                                scan_start();
-//                        }
                         if(m_application_state.app_state == APP_STATE_IDLE)
                         {
                                 scan_start();
@@ -1278,7 +1191,7 @@ static void db_discovery_init(void)
  */
 static void idle_state_handle(void)
 {
-        //module_background_dfu_host_state_schedule();
+
         if (NRF_LOG_PROCESS() == false)
         {
                 nrf_pwr_mgmt_run();
@@ -1311,8 +1224,6 @@ int main(void)
 
         app_display_init(&m_application_state);
         display_update();
-
-        //scan_start();
 
         // Enter main loop.
         for (;;)

@@ -87,7 +87,7 @@
       <file file_name="../../../../../../modules/nrfx/drivers/src/nrfx_uart.c" />
       <file file_name="../../../../../../modules/nrfx/drivers/src/nrfx_uarte.c" />
       <file file_name="../../../../../../modules/nrfx/drivers/src/nrfx_spim.c" />
-      <file file_name="../../../../../../integration/nrfx/legacy/nrf_drv_spi.c" />      
+      <file file_name="../../../../../../integration/nrfx/legacy/nrf_drv_spi.c" />
     </folder>
     <folder Name="Board Support">
       <file file_name="../../../../../../components/libraries/bsp/bsp.c" />
@@ -102,6 +102,7 @@
       <file file_name="../../../../common/adafruit_touch_display/gfx_extended/nrf_gfx_ext.c" />
       <file file_name="../../../../common/adafruit_touch_display/ugui/ugui.c" />
       <file file_name="../../../../common/adafruit_touch_display/gfx_extended/ili9341_ext.c" />
+      <file file_name="../../../../module/packet_error_rate.c" />      
     </folder>
     <folder Name="nRF_Segger_RTT">
       <file file_name="../../../../../../external/segger_rtt/SEGGER_RTT.c" />

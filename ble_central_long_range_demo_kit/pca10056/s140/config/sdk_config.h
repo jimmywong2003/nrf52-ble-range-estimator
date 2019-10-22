@@ -172,7 +172,7 @@
 
 // <o> NRF_BLE_SCAN_SUPERVISION_TIMEOUT - Determines the supervision time-out in units of 10 millisecond.
 #ifndef NRF_BLE_SCAN_SUPERVISION_TIMEOUT
-#define NRF_BLE_SCAN_SUPERVISION_TIMEOUT 10000
+#define NRF_BLE_SCAN_SUPERVISION_TIMEOUT 6000
 #endif
 
 // <o> NRF_BLE_SCAN_SCAN_PHY  - PHY to scan on.

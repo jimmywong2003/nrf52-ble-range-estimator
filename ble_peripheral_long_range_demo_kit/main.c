@@ -83,6 +83,7 @@
 #include "ble_file_transfer_service.h"
 
 #include "app_display.h"
+#include "packet_error_rate.h"
 
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
@@ -98,60 +99,8 @@
 #define ADVERTISING_LED                  BSP_BOARD_LED_2
 #define CONNECTED_LED                    BSP_BOARD_LED_3
 
-//
-// #define PHY_SELECTION_LED               BSP_BOARD_LED_0                                 /**< LED indicating which phy is in use. */
-// #define OUTPUT_POWER_SELECTION_LED      BSP_BOARD_LED_1                                 /**< LED indicating at which ouput power the radio is transmitting */
-// #define NON_CONN_ADV_LED                BSP_BOARD_LED_2                                 /**< LED indicting if the device is advertising non-connectable advertising or not. */
-// #define CONN_ADV_CONN_STATE_LED         BSP_BOARD_LED_3                                 /**< LED indicating that if device is advertising with connectable advertising, in a connected state, or none. */
-//
-// #define PHY_SELECTION_BUTTON                  BSP_BUTTON_0
-// #define PHY_SELECTION_BUTTON_EVENT            BSP_EVENT_KEY_0
-// #define OUTPUT_POWER_SELECTION_BUTTON         BSP_BUTTON_1
-// #define OUTPUT_POWER_SELECTION_BUTTON_EVENT   BSP_EVENT_KEY_1
-// #define NON_CONN_OR_CONN_ADV_BUTTON           BSP_BUTTON_2
-// #define NON_CONN_OR_CONN_ADV_BUTTON_EVENT     BSP_EVENT_KEY_2
-// #define BUTTON_NOT_IN_USE                     BSP_BUTTON_3
-// #define BUTTON_NOT_IN_USE_EVENT               BSP_EVENT_KEY_3
-//
-// #define FAST_BLINK_INTERVAL   APP_TIMER_TICKS(200)
-// APP_TIMER_DEF(m_non_conn_fast_blink_timer_id);                /**< Timer used to toggle LED indicating non-connectable advertising on the dev. kit. */
-// APP_TIMER_DEF(m_conn_adv_fast_blink_timer_id);                /**< Timer used to toggle LED indicating connectable advertising on the dev. kit. */
-//
-// #define SLOW_BLINK_INTERVAL   APP_TIMER_TICKS(750)
-// APP_TIMER_DEF(m_1Mbps_led_slow_blink_timer_id);                /**< Timer used to toggle LED for phy selection indication on the dev.kit. */
-// APP_TIMER_DEF(m_8dBm_led_slow_blink_timer_id);                 /**< Timer used to toggle LED for output power selection indication on the dev.kit. */
-//
-// // Type holding the two output power options for this application.
-// typedef enum
-// {
-//         SELECTION_0_dBm = 0,
-//         SELECTION_8_dBm = 8
-// } output_power_seclection_t;
-//
-// // Type holding the two advertising selection modes.
-// typedef enum
-// {
-//         SELECTION_CONNECTABLE = 0,
-//         SELECTION_NON_CONNECTABLE
-// } adv_scan_type_seclection_t;
-//
-// // Type holding the two possible phy options.
-// typedef enum
-// {
-//         SELECTION_1M_PHY = 0,
-//         SELECTION_2M_PHY,
-//         SELECTION_CODED_PHY
-// } adv_scan_phy_seclection_t;
-//
-// static adv_scan_type_seclection_t m_adv_scan_type_selected = SELECTION_CONNECTABLE;     /**< Global variable holding the current scan selection mode. */
-// static adv_scan_phy_seclection_t m_adv_scan_phy_selected  = SELECTION_CODED_PHY;         /**< Global variable holding the current phy selection. */
-// static output_power_seclection_t m_output_power_selected  = SELECTION_8_dBm;             /**< Global variable holding the current output power selection. */
-// static bool m_app_initiated_disconnect  = false;                   //The application has initiated disconnect. Used to "tell" on_ble_gap_evt_disconnected() to not start advertising.
-// static bool m_waiting_for_disconnect_evt     = false;             // Disconnect is initiated. The application has to wait for BLE_GAP_EVT_DISCONNECTED before proceeding.
-//
-
-#define DEVICE_TX_DATA_SEND_BUTTON                BSP_BUTTON_2
-#define DEVICE_TX_CMD_SEND_BUTTON                 BSP_BUTTON_3
+//#define DEVICE_TX_DATA_SEND_BUTTON                BSP_BUTTON_2
+//#define DEVICE_TX_CMD_SEND_BUTTON                 BSP_BUTTON_3
 
 #define APP_BLE_CONN_CFG_TAG            1                                           /**< A tag identifying the SoftDevice BLE configuration. */
 
@@ -167,7 +116,7 @@
 #define MIN_CONN_INTERVAL               MSEC_TO_UNITS(7.5, UNIT_1_25_MS)             /**< Minimum acceptable connection interval (20 ms), Connection interval uses 1.25 ms units. */
 #define MAX_CONN_INTERVAL               MSEC_TO_UNITS(7.5, UNIT_1_25_MS)             /**< Maximum acceptable connection interval (75 ms), Connection interval uses 1.25 ms units. */
 #define SLAVE_LATENCY                   0                                           /**< Slave latency. */
-#define CONN_SUP_TIMEOUT                MSEC_TO_UNITS(10000, UNIT_10_MS)             /**< Connection supervisory timeout (4 seconds), Supervision Timeout uses 10 ms units. */
+#define CONN_SUP_TIMEOUT                MSEC_TO_UNITS(6000, UNIT_10_MS)             /**< Connection supervisory timeout (4 seconds), Supervision Timeout uses 10 ms units. */
 #define FIRST_CONN_PARAMS_UPDATE_DELAY  APP_TIMER_TICKS(5000)                       /**< Time from initiating event (connect or start of notification) to first time sd_ble_gap_conn_param_update is called (5 seconds). */
 #define NEXT_CONN_PARAMS_UPDATE_DELAY   APP_TIMER_TICKS(10000)                      /**< Time between each call to sd_ble_gap_conn_param_update after the first call (30 seconds). */
 #define MAX_CONN_PARAMS_UPDATE_COUNT    3                                           /**< Number of attempts before giving up the connection parameter negotiation. */
@@ -195,8 +144,7 @@ BLE_FTS_DEF(m_fts);     /**< BLE File Transfer Service instance. */
 NRF_BLE_GATT_DEF(m_gatt);                                                           /**< GATT module instance. */
 NRF_BLE_QWR_DEF(m_qwr);                                                             /**< Context for the Queued Write module.*/
 
-
-#define RESTART_ADVERTISING_TIMEOUT_MS  2000
+#define RESTART_ADVERTISING_TIMEOUT_MS  100
 
 static uint8_t m_adv_handle = BLE_GAP_ADV_SET_HANDLE_NOT_SET;                   /**< Advertising handle used to identify an advertising set. */
 static bool m_advertising_is_running = false;
@@ -508,49 +456,6 @@ static void conn_params_init(void)
 }
 
 
-///**@brief Function for putting the chip into sleep mode.
-// *
-// * @note This function will not return.
-// */
-//static void sleep_mode_enter(void)
-//{
-//        uint32_t err_code = bsp_indication_set(BSP_INDICATE_IDLE);
-//        APP_ERROR_CHECK(err_code);
-//
-//        // Prepare wakeup buttons.
-//        err_code = bsp_btn_ble_sleep_mode_prepare();
-//        APP_ERROR_CHECK(err_code);
-//
-//        // Go to system-off mode (this function will not return; wakeup will cause a reset).
-//        err_code = sd_power_system_off();
-//        APP_ERROR_CHECK(err_code);
-//}
-
-
-///**@brief Function for handling advertising events.
-// *
-// * @details This function will be called for advertising events which are passed to the application.
-// *
-// * @param[in] ble_adv_evt  Advertising event.
-// */
-//static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
-//{
-//        uint32_t err_code;
-//
-//        switch (ble_adv_evt)
-//        {
-//        case BLE_ADV_EVT_FAST:
-//                err_code = bsp_indication_set(BSP_INDICATE_ADVERTISING);
-//                APP_ERROR_CHECK(err_code);
-//                break;
-//        case BLE_ADV_EVT_IDLE:
-//                sleep_mode_enter();
-//                break;
-//        default:
-//                break;
-//        }
-//}
-
 /****************************************************************/
 static void Get_Connect_MAC_Address(ble_gap_addr_t *gap_address)
 {
@@ -562,8 +467,6 @@ static void Get_Connect_MAC_Address(ble_gap_addr_t *gap_address)
                      gap_address->addr[1],
                      gap_address->addr[0]);
 }
-
-
 
 
 /**@brief Function for handling BLE_GAP_EVT_CONNECTED events.
@@ -654,18 +557,26 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
                 // NRF_LOG_HEXDUMP_INFO(p_gap_evt->params.connected.peer_addr.addr, 6);
                 Get_Connect_MAC_Address((ble_gap_addr_t *)&p_gap_evt->params.connected.peer_addr);
 
+                packet_error_rate_reset_counter();
+                packet_error_rate_detect_enable();
+
                 m_application_state.app_state = APP_STATE_CONNECTED;
                 display_update();
 
                 break;
 
         case BLE_GAP_EVT_DISCONNECTED:
-                NRF_LOG_INFO("Disconnected");
+                NRF_LOG_INFO("Disconnected. conn_handle: 0x%x, reason: 0x%x",
+                             p_gap_evt->conn_handle,
+                             p_gap_evt->params.disconnected.reason);
+
                 // LED indication will be changed when advertising starts.
                 m_conn_handle = BLE_CONN_HANDLE_INVALID;
                 m_advertising_is_running  = false;
 
                 m_application_state.rssi[p_ble_evt->evt.gap_evt.conn_handle] = 0;
+
+                packet_error_rate_detect_disable();
 
                 if(m_application_state.app_state == APP_STATE_CONNECTED)
                 {
@@ -673,9 +584,9 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 
                         err_code = app_timer_start(m_restart_advertising_timer_id, APP_TIMER_TICKS(RESTART_ADVERTISING_TIMEOUT_MS), 0);
                         APP_ERROR_CHECK(err_code);
+
+
                 }
-
-
 
                 display_update();
 
@@ -722,8 +633,11 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
         case BLE_GAP_EVT_RSSI_CHANGED:
                 if (rssi_count % 10 == 0)
                 {
-                    m_application_state.rssi[p_ble_evt->evt.gap_evt.conn_handle] = p_ble_evt->evt.gap_evt.params.rssi_changed.rssi;
-                    display_update();
+                        packet_error_rate_timeout_handler();
+                        NRF_LOG_INFO("RSSI = %d (dBm), PSR = %03d%%", p_ble_evt->evt.gap_evt.params.rssi_changed.rssi, get_packet_success_rate());
+                        m_application_state.psr = get_packet_success_rate();
+                        m_application_state.rssi[p_ble_evt->evt.gap_evt.conn_handle] = p_ble_evt->evt.gap_evt.params.rssi_changed.rssi;
+                        display_update();
                 }
                 rssi_count++;
                 break;
@@ -1098,15 +1012,6 @@ static void button_event_handler(uint8_t pin_no, uint8_t button_action)
                 break;
 
         case THROUGHPUT_TEST_BUTTON:
-                NRF_LOG_INFO("Send button state change.");
-                // err_code = ble_lbs_on_button_change(m_conn_handle[0], &m_lbs, button_action);
-                // if (err_code != NRF_SUCCESS &&
-                //     err_code != BLE_ERROR_INVALID_CONN_HANDLE &&
-                //     err_code != NRF_ERROR_INVALID_STATE &&
-                //     err_code != BLE_ERROR_GATTS_SYS_ATTR_MISSING)
-                // {
-                //         APP_ERROR_CHECK(err_code);
-                // }
                 m_application_state.button_pressed = button_action;
                 display_update();
                 break;
@@ -1175,15 +1080,6 @@ static void idle_state_handle(void)
         }
 }
 
-
-// /**@brief Function for starting advertising.
-//  */
-// static void advertising_start(void)
-// {
-//         uint32_t err_code = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
-//         APP_ERROR_CHECK(err_code);
-// }
-
 /**@brief Function for starting advertising.
  */
 static void advertising_start(void)
@@ -1204,9 +1100,23 @@ static void advertising_start(void)
                 {
                         APP_ERROR_CHECK(err_code);
                 }
-
-//                m_advertising_is_running = true;
         }
+        else if (m_application_state.app_state == APP_STATE_DISCONNECTED)
+        {
+                err_code = sd_ble_gap_adv_start(m_adv_handle, APP_BLE_CONN_CFG_TAG);
+                if(err_code == NRF_SUCCESS)
+                {
+                        bsp_board_led_on(ADVERTISING_LED);
+
+                        m_application_state.app_state = APP_STATE_ADVERTISING;
+                        display_update();
+                }
+                else
+                {
+                        APP_ERROR_CHECK(err_code);
+                }
+        }
+
 }
 
 /**@brief Application main function.

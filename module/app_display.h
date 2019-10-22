@@ -67,7 +67,7 @@
 #define BTN_ID_4_WIDTH TXT_ID_10_WIDTH
 #define BTN_ID_4_HEIGHT BTN_ID_0_HEIGHT
 
-// RSSI/PER status window
+// RSSI/PSR status window
 #define TXT_ID_3_X_LOCATION 16
 #define TXT_ID_3_WIDTH 90
 #define TXT_ID_3_HEIGHT 16
@@ -128,7 +128,7 @@ typedef struct {
         uint32_t phy;
         uint32_t tx_power;
         uint32_t app_state;
-        uint16_t per;
+        uint16_t psr;
         bool led_on;
         bool button_pressed;
         int8_t rssi[3];
