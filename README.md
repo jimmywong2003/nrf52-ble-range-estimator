@@ -7,6 +7,8 @@ Example on how to show the RSSI with Packet Error Rate with difference link (1Mb
 * Press the button 2 : Change the TX Power on 0dBm, 4dBm, 8dBm
 * Press the button 3 : Start / Stop advertising (Peripheral / Central)
 
+![image](https://github.com/jimmywong2003/nrf52-ble-rssi-with-packet_error_rate_range_test/blob/master/picture/nRF52840_LONG_RANGE_DEMO.jpg)
+
 ## Requirement
 
 * NRF52840 DK x 2
