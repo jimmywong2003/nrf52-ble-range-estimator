@@ -20,4 +20,4 @@ Example on how to show the RSSI with Packet Error Rate with difference link (1Mb
 * SDK 15.3
 * Segger Embedded Studio
 
-
+All the details can be found at [URL](https://jimmywongiot.com/2019/10/22/ble-range-estimator-on-the-nordic-nrf52840/).
