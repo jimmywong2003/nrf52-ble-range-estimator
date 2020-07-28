@@ -461,7 +461,7 @@ uint32_t ble_fts_c_rx_cmd_send(ble_fts_c_t * p_ble_fts_c, uint8_t * cmd_data, ui
                 return NRF_ERROR_INVALID_STATE;
         }
         memcpy(&data_buf[0], cmd_data, length);
-        NRF_LOG_INFO("%s: handle = %04x, len = %d", __func__, p_ble_fts_c->handles.fts_rx_cmd_handle, length);
+        NRF_LOG_DEBUG("%s: handle = %04x, len = %d", __func__, p_ble_fts_c->handles.fts_rx_cmd_handle, length);
         ble_gattc_write_params_t const write_params =
         {
                 .write_op = BLE_GATT_OP_WRITE_CMD,
